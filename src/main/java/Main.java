@@ -7,7 +7,7 @@ import java.io.FileOutputStream;
 import java.io.PrintStream;
 
 public class Main {
-    private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd");
+    private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd", "jobs");
     private static String currentDir = System.getProperty("user.dir");
 
     public static void main(String[] args) throws Exception {
@@ -108,6 +108,10 @@ public class Main {
 
                     case "cd":
                         changeDirectory(arguments);
+                        break;
+
+                    case "jobs":
+                        // No output when there are no background jobs
                         break;
 
                     default:
