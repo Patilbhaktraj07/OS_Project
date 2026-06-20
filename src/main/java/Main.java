@@ -3,6 +3,8 @@ import java.util.Set;
 import java.util.List;
 import java.util.ArrayList;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
 
 public class Main {
     private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd");
@@ -23,58 +25,107 @@ public class Main {
             List<String> tokens = parseTokens(input);
             if (tokens.isEmpty()) continue;
 
-            String command = tokens.get(0);
-            String arguments = tokens.size() > 1
-                ? String.join(" ", tokens.subList(1, tokens.size()))
+            // Detect stdout redirection: > file  or  1> file
+            String redirectFile = null;
+            List<String> cmdTokens = new ArrayList<>();
+            for (int i = 0; i < tokens.size(); i++) {
+                String t = tokens.get(i);
+                if ((t.equals(">") || t.equals("1>")) && i + 1 < tokens.size()) {
+                    redirectFile = tokens.get(++i);
+                } else {
+                    cmdTokens.add(t);
+                }
+            }
+
+            if (cmdTokens.isEmpty()) continue;
+
+            String command = cmdTokens.get(0);
+            String arguments = cmdTokens.size() > 1
+                ? String.join(" ", cmdTokens.subList(1, cmdTokens.size()))
                 : "";
 
-            switch (command) {
-                case "exit":
-                    int code = 0;
-                    if (!arguments.isEmpty()) {
-                        try { code = Integer.parseInt(arguments); }
-                        catch (NumberFormatException e) { /* default 0 */ }
-                    }
-                    scanner.close();
-                    System.exit(code);
-                    break;
+            // For builtins, swap System.out to the file if redirecting
+            PrintStream originalOut = System.out;
+            if (redirectFile != null) {
+                File f = new File(redirectFile.startsWith("/") ? redirectFile
+                        : currentDir + File.separator + redirectFile);
+                f.getParentFile().mkdirs();
+                System.setOut(new PrintStream(new FileOutputStream(f, false)));
+            }
 
-                case "echo":
-                    System.out.println(String.join(" ", tokens.subList(1, tokens.size())));
-                    break;
-
-                case "type":
-                    if (BUILTINS.contains(arguments)) {
-                        System.out.println(arguments + " is a shell builtin");
-                    } else {
-                        String path = findInPath(arguments);
-                        if (path != null) {
-                            System.out.println(arguments + " is " + path);
-                        } else {
-                            System.out.println(arguments + ": not found");
+            try {
+                switch (command) {
+                    case "exit":
+                        System.setOut(originalOut);
+                        int code = 0;
+                        if (!arguments.isEmpty()) {
+                            try { code = Integer.parseInt(arguments); }
+                            catch (NumberFormatException e) { /* default 0 */ }
                         }
-                    }
-                    break;
+                        scanner.close();
+                        System.exit(code);
+                        break;
 
-                case "pwd":
-                    System.out.println(currentDir);
-                    break;
+                    case "echo":
+                        System.out.println(String.join(" ", cmdTokens.subList(1, cmdTokens.size())));
+                        break;
 
-                case "cd":
-                    changeDirectory(arguments);
-                    break;
+                    case "type":
+                        if (BUILTINS.contains(arguments)) {
+                            System.out.println(arguments + " is a shell builtin");
+                        } else {
+                            String path = findInPath(arguments);
+                            if (path != null) {
+                                System.out.println(arguments + " is " + path);
+                            } else {
+                                System.out.println(arguments + ": not found");
+                            }
+                        }
+                        break;
 
-                default:
-                    String execPath = findInPath(command);
-                    if (execPath != null) {
-                        runExternal(tokens.toArray(new String[0]));
-                    } else {
-                        System.out.println(command + ": command not found");
-                    }
+                    case "pwd":
+                        System.out.println(currentDir);
+                        break;
+
+                    case "cd":
+                        changeDirectory(arguments);
+                        break;
+
+                    default:
+                        String execPath = findInPath(command);
+                        if (execPath != null) {
+                            runExternal(cmdTokens.toArray(new String[0]), redirectFile);
+                        } else {
+                            // Error goes to real stderr, not redirected
+                            System.err.println(command + ": command not found");
+                        }
+                }
+            } finally {
+                // Always restore System.out after builtin runs
+                System.out.flush();
+                System.setOut(originalOut);
             }
         }
 
         scanner.close();
+    }
+
+    private static void runExternal(String[] cmdArgs, String redirectFile) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(cmdArgs);
+        pb.directory(new File(currentDir));
+
+        if (redirectFile != null) {
+            File f = new File(redirectFile.startsWith("/") ? redirectFile
+                    : currentDir + File.separator + redirectFile);
+            f.getParentFile().mkdirs();
+            pb.redirectOutput(f);          // stdout → file
+        } else {
+            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        }
+        pb.redirectError(ProcessBuilder.Redirect.INHERIT); // stderr always to terminal
+
+        Process process = pb.start();
+        process.waitFor();
     }
 
     private static List<String> parseTokens(String input) {
@@ -90,16 +141,16 @@ public class Main {
                 if (c == '\'') {
                     inSingleQuote = false;
                 } else {
-                    current.append(c); // everything literal inside single quotes
+                    current.append(c);
                 }
             } else if (inDoubleQuote) {
                 if (c == '\\' && i + 1 < input.length()) {
                     char next = input.charAt(i + 1);
                     if (next == '"' || next == '\\') {
-                        current.append(next); // \" → "   and   \\ → \
+                        current.append(next);
                         i++;
                     } else {
-                        current.append(c); // backslash is literal for any other char
+                        current.append(c);
                     }
                 } else if (c == '"') {
                     inDoubleQuote = false;
@@ -107,7 +158,6 @@ public class Main {
                     current.append(c);
                 }
             } else {
-                // Unquoted
                 if (c == '\\') {
                     if (i + 1 < input.length()) {
                         current.append(input.charAt(++i));
@@ -148,19 +198,11 @@ public class Main {
         File resolved = target.getAbsoluteFile().toPath().normalize().toFile();
 
         if (!resolved.exists() || !resolved.isDirectory()) {
-            System.out.println("cd: " + path + ": No such file or directory");
+            System.err.println("cd: " + path + ": No such file or directory");
         } else {
             currentDir = resolved.getPath();
             System.setProperty("user.dir", currentDir);
         }
-    }
-
-    private static void runExternal(String[] cmdArgs) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder(cmdArgs);
-        pb.directory(new File(currentDir));
-        pb.inheritIO();
-        Process process = pb.start();
-        process.waitFor();
     }
 
     private static String findInPath(String command) {
