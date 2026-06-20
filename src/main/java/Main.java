@@ -5,6 +5,9 @@ import java.util.ArrayList;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 
 public class Main {
     private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd", "jobs");
@@ -14,7 +17,7 @@ public class Main {
         int number;
         long pid;
         String command;
-        Process process; // For pipelines, this can track the final process in the chain
+        Process process;
 
         Job(int number, long pid, String command, Process process) {
             this.number = number;
@@ -24,7 +27,7 @@ public class Main {
         }
 
         boolean isRunning() {
-            return process.isAlive();
+            return process != null && process.isAlive();
         }
     }
 
@@ -54,7 +57,6 @@ public class Main {
                 if (tokens.isEmpty()) continue;
             }
 
-            // Extract file redirections
             String stdoutFile = null;
             String stderrFile = null;
             boolean stdoutAppend = false;
@@ -82,14 +84,13 @@ public class Main {
 
             if (cmdTokens.isEmpty()) continue;
 
-            // Check if this is a pipeline execution (contains "|")
             int pipeIndex = cmdTokens.indexOf("|");
             if (pipeIndex != -1) {
                 List<String> leftCmd = cmdTokens.subList(0, pipeIndex);
                 List<String> rightCmd = cmdTokens.subList(pipeIndex + 1, cmdTokens.size());
                 
                 if (!leftCmd.isEmpty() && !rightCmd.isEmpty()) {
-                    runPipeline(leftCmd, rightCmd, stdoutFile, stdoutAppend, stderrFile, stderrAppend, background, input);
+                    runUniversalPipeline(leftCmd, rightCmd, stdoutFile, stdoutAppend, stderrFile, stderrAppend);
                     continue;
                 }
             }
@@ -126,57 +127,7 @@ public class Main {
             }
 
             try {
-                switch (command) {
-                    case "exit":
-                        System.setOut(originalOut);
-                        System.setErr(originalErr);
-                        int code = 0;
-                        if (!arguments.isEmpty()) {
-                            try { code = Integer.parseInt(arguments); }
-                            catch (NumberFormatException e) { }
-                        }
-                        scanner.close();
-                        System.exit(code);
-                        break;
-
-                    case "echo":
-                        System.out.println(String.join(" ", cmdTokens.subList(1, cmdTokens.size())));
-                        break;
-
-                    case "type":
-                        if (BUILTINS.contains(arguments)) {
-                            System.out.println(arguments + " is a shell builtin");
-                        } else {
-                            String path = findInPath(arguments);
-                            if (path != null) {
-                                System.out.println(arguments + " is " + path);
-                            } else {
-                                System.out.println(arguments + ": not found");
-                            }
-                        }
-                        break;
-
-                    case "pwd":
-                        System.out.println(currentDir);
-                        break;
-
-                    case "cd":
-                        changeDirectory(arguments);
-                        break;
-
-                    case "jobs":
-                        listJobs();
-                        break;
-
-                    default:
-                        String execPath = findInPath(command);
-                        if (execPath != null) {
-                            runExternal(cmdTokens.toArray(new String[0]),
-                                stdoutFile, stdoutAppend, stderrFile, stderrAppend);
-                        } else {
-                            System.err.println(command + ": command not found");
-                        }
-                }
+                executeSingleCommand(command, arguments, cmdTokens, originalOut, originalErr, scanner);
             } finally {
                 System.out.flush();
                 System.err.flush();
@@ -188,58 +139,157 @@ public class Main {
         scanner.close();
     }
 
-    private static void runPipeline(List<String> leftCmd, List<String> rightCmd,
-                                    String stdoutFile, boolean stdoutAppend,
-                                    String stderrFile, boolean stderrAppend,
-                                    boolean background, String fullInputString) throws Exception {
-        
-        ProcessBuilder pbLeft = new ProcessBuilder(leftCmd);
-        pbLeft.directory(new File(currentDir));
-        
-        ProcessBuilder pbRight = new ProcessBuilder(rightCmd);
-        pbRight.directory(new File(currentDir));
+    private static void executeSingleCommand(String command, String arguments, List<String> cmdTokens, 
+                                             PrintStream originalOut, PrintStream originalErr, Scanner scanner) throws Exception {
+        switch (command) {
+            case "exit":
+                System.setOut(originalOut);
+                System.setErr(originalErr);
+                int code = 0;
+                if (!arguments.isEmpty()) {
+                    try { code = Integer.parseInt(arguments); }
+                    catch (NumberFormatException e) { }
+                }
+                scanner.close();
+                System.exit(code);
+                break;
 
-        // Setup standard error output for both pipeline halves
-        if (stderrFile != null) {
-            File f = resolveFile(stderrFile);
-            f.getParentFile().mkdirs();
-            ProcessBuilder.Redirect red = stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f);
-            pbLeft.redirectError(red);
-            pbRight.redirectError(red);
+            case "echo":
+                System.out.println(String.join(" ", cmdTokens.subList(1, cmdTokens.size())));
+                break;
+
+            case "type":
+                if (BUILTINS.contains(arguments)) {
+                    System.out.println(arguments + " is a shell builtin");
+                } else {
+                    String path = findInPath(arguments);
+                    if (path != null) {
+                        System.out.println(arguments + " is " + path);
+                    } else {
+                        System.out.println(arguments + ": not found");
+                    }
+                }
+                break;
+
+            case "pwd":
+                System.out.println(currentDir);
+                break;
+
+            case "cd":
+                changeDirectory(arguments);
+                break;
+
+            case "jobs":
+                listJobs();
+                break;
+
+            default:
+                String execPath = findInPath(command);
+                if (execPath != null) {
+                    runExternal(cmdTokens.toArray(new String[0]), null, false, null, false);
+                } else {
+                    System.err.println(command + ": command not found");
+                }
+        }
+    }
+
+    private static void runUniversalPipeline(List<String> leftCmd, List<String> rightCmd,
+                                             String stdoutFile, boolean stdoutAppend,
+                                             String stderrFile, boolean stderrAppend) throws Exception {
+        byte[] pipeBuffer;
+
+        // --- STAGE 1: Execute LHS and capture output into pipeBuffer ---
+        String leftCommand = leftCmd.get(0);
+        String leftArgs = leftCmd.size() > 1 ? String.join(" ", leftCmd.subList(1, leftCmd.size())) : "";
+
+        ByteArrayOutputStream lhsOut = new ByteArrayOutputStream();
+        PrintStream lhsPrintStream = new PrintStream(lhsOut);
+
+        PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
+
+        if (BUILTINS.contains(leftCommand)) {
+            System.setOut(lhsPrintStream);
+            try {
+                executeSingleCommand(leftCommand, leftArgs, leftCmd, originalOut, originalErr, null);
+            } finally {
+                System.out.flush();
+                System.setOut(originalOut);
+            }
+            pipeBuffer = lhsOut.toByteArray();
         } else {
+            // External command LHS
+            ProcessBuilder pbLeft = new ProcessBuilder(leftCmd);
+            pbLeft.directory(new File(currentDir));
             pbLeft.redirectError(ProcessBuilder.Redirect.INHERIT);
-            pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+            
+            Process procLeft = pbLeft.start();
+            
+            // Read all stdout from the left process natively
+            try (InputStream is = procLeft.getInputStream()) {
+                is.transferTo(lhsOut);
+            }
+            procLeft.waitFor();
+            pipeBuffer = lhsOut.toByteArray();
         }
 
-        // Setup the final standard output redirection for the RHS of the pipeline
+        // --- STAGE 2: Execute RHS using data from pipeBuffer as its input ---
+        String rightCommand = rightCmd.get(0);
+        String rightArgs = rightCmd.size() > 1 ? String.join(" ", rightCmd.subList(1, rightCmd.size())) : "";
+
+        // Wire up output destination for the pipeline terminal
+        PrintStream destinationOut = originalOut;
         if (stdoutFile != null) {
             File f = resolveFile(stdoutFile);
             f.getParentFile().mkdirs();
-            pbRight.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
-        } else {
-            pbRight.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+            destinationOut = new PrintStream(new FileOutputStream(f, stdoutAppend));
         }
 
-        // Connect the pipeline!
-        List<Process> processes = ProcessBuilder.startPipeline(List.of(pbLeft, pbRight));
-        Process finalProcess = processes.get(processes.size() - 1);
-
-        if (background) {
-            int jobNum = 1;
-            if (!jobs.isEmpty()) {
-                int maxNum = Integer.MIN_VALUE;
-                for (Job j : jobs) {
-                    if (j.number > maxNum) maxNum = j.number;
+        if (BUILTINS.contains(rightCommand)) {
+            System.setOut(destinationOut);
+            
+            // Built-ins normally read from System.in, but in this specific stage, commands like 'type'
+            // check parameters passed directly as arguments. To cover cases where builtins read input,
+            // we override standard arguments dynamically if required.
+            if (rightCommand.equals("type") && rightArgs.isEmpty()) {
+                String inputData = new String(pipeBuffer).trim();
+                if (!inputData.isEmpty()) {
+                    rightArgs = inputData.split("\\s+")[0];
+                    // Rebuild right tokens
+                    rightCmd = new ArrayList<>(rightCmd);
+                    rightCmd.add(rightArgs);
                 }
-                jobNum = maxNum + 1;
             }
-            long pid = finalProcess.pid();
-            jobs.add(new Job(jobNum, pid, fullInputString, finalProcess));
-            System.out.println("[" + jobNum + "] " + pid);
-            System.out.flush();
+
+            try {
+                executeSingleCommand(rightCommand, rightArgs, rightCmd, originalOut, originalErr, null);
+            } finally {
+                System.out.flush();
+                if (stdoutFile != null) destinationOut.close();
+                System.setOut(originalOut);
+            }
         } else {
-            // Synchronous execution: Wait for the last command in the pipeline chain to wrap up
-            finalProcess.waitFor();
+            // External command RHS
+            ProcessBuilder pbRight = new ProcessBuilder(rightCmd);
+            pbRight.directory(new File(currentDir));
+            pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+
+            if (stdoutFile != null) {
+                File f = resolveFile(stdoutFile);
+                pbRight.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
+            } else {
+                pbRight.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+            }
+
+            Process procRight = pbRight.start();
+            
+            // Feed the buffered LHS output directly into the RHS process input channel
+            try (OutputStream os = procRight.getOutputStream()) {
+                os.write(pipeBuffer);
+                os.flush();
+            }
+            
+            procRight.waitFor();
         }
     }
 
