@@ -1,5 +1,7 @@
 import java.util.Scanner;
 import java.util.Set;
+import java.util.List;
+import java.util.ArrayList;
 import java.io.File;
 
 public class Main {
@@ -18,9 +20,14 @@ public class Main {
 
             if (input.isEmpty()) continue;
 
-            String[] parts = input.split("\\s+", 2);
-            String command = parts[0];
-            String arguments = parts.length > 1 ? parts[1].trim() : "";
+            // Parse input into tokens respecting quotes
+            List<String> tokens = parseTokens(input);
+            if (tokens.isEmpty()) continue;
+
+            String command = tokens.get(0);
+            String arguments = tokens.size() > 1
+                ? String.join(" ", tokens.subList(1, tokens.size()))
+                : "";
 
             switch (command) {
                 case "exit":
@@ -34,7 +41,8 @@ public class Main {
                     break;
 
                 case "echo":
-                    System.out.println(arguments);
+                    // Print each argument separated by a single space
+                    System.out.println(String.join(" ", tokens.subList(1, tokens.size())));
                     break;
 
                 case "type":
@@ -61,7 +69,8 @@ public class Main {
                 default:
                     String execPath = findInPath(command);
                     if (execPath != null) {
-                        runExternal(input.split("\\s+"));
+                        // Pass parsed tokens directly — preserves spaces in args
+                        runExternal(tokens.toArray(new String[0]));
                     } else {
                         System.out.println(command + ": command not found");
                     }
@@ -71,8 +80,44 @@ public class Main {
         scanner.close();
     }
 
+    // Tokenizer: splits on unquoted whitespace, handles single quotes
+    private static List<String> parseTokens(String input) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inSingleQuote = false;
+
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+
+            if (inSingleQuote) {
+                if (c == '\'') {
+                    inSingleQuote = false; // closing quote — stay in same token
+                } else {
+                    current.append(c); // everything literal inside single quotes
+                }
+            } else {
+                if (c == '\'') {
+                    inSingleQuote = true; // opening quote — stay in same token
+                } else if (c == ' ' || c == '\t') {
+                    if (current.length() > 0) {
+                        tokens.add(current.toString());
+                        current.setLength(0);
+                    }
+                    // skip whitespace between tokens
+                } else {
+                    current.append(c);
+                }
+            }
+        }
+
+        if (current.length() > 0) {
+            tokens.add(current.toString());
+        }
+
+        return tokens;
+    }
+
     private static void changeDirectory(String path) {
-        // Expand ~ to HOME
         if (path.equals("~") || path.startsWith("~/")) {
             String home = System.getenv("HOME");
             if (home == null) home = System.getProperty("user.home");
