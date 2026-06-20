@@ -2,6 +2,7 @@ import java.util.Scanner;
 import java.util.Set;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
@@ -9,6 +10,7 @@ import java.io.PrintStream;
 public class Main {
     private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd", "jobs");
     private static String currentDir = System.getProperty("user.dir");
+    private static final AtomicInteger jobCounter = new AtomicInteger(0);
 
     public static void main(String[] args) throws Exception {
         Scanner scanner = new Scanner(System.in);
@@ -24,6 +26,14 @@ public class Main {
 
             List<String> tokens = parseTokens(input);
             if (tokens.isEmpty()) continue;
+
+            // Detect background execution
+            boolean background = false;
+            if (tokens.get(tokens.size() - 1).equals("&")) {
+                background = true;
+                tokens.remove(tokens.size() - 1);
+                if (tokens.isEmpty()) continue;
+            }
 
             String stdoutFile = null;
             String stderrFile = null;
@@ -56,6 +66,18 @@ public class Main {
             String arguments = cmdTokens.size() > 1
                 ? String.join(" ", cmdTokens.subList(1, cmdTokens.size()))
                 : "";
+
+            // Background builtins are unusual; run them normally for now
+            if (background && !BUILTINS.contains(command)) {
+                String execPath = findInPath(command);
+                if (execPath != null) {
+                    runBackground(cmdTokens.toArray(new String[0]),
+                        stdoutFile, stdoutAppend, stderrFile, stderrAppend);
+                } else {
+                    System.err.println(command + ": command not found");
+                }
+                continue;
+            }
 
             PrintStream originalOut = System.out;
             PrintStream originalErr = System.err;
@@ -111,15 +133,13 @@ public class Main {
                         break;
 
                     case "jobs":
-                        // No output when there are no background jobs
                         break;
 
                     default:
                         String execPath = findInPath(command);
                         if (execPath != null) {
                             runExternal(cmdTokens.toArray(new String[0]),
-                                stdoutFile, stdoutAppend,
-                                stderrFile, stderrAppend);
+                                stdoutFile, stdoutAppend, stderrFile, stderrAppend);
                         } else {
                             System.err.println(command + ": command not found");
                         }
@@ -133,6 +153,38 @@ public class Main {
         }
 
         scanner.close();
+    }
+
+    private static void runBackground(String[] cmdArgs,
+                                      String stdoutFile, boolean stdoutAppend,
+                                      String stderrFile, boolean stderrAppend) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(cmdArgs);
+        pb.directory(new File(currentDir));
+
+        if (stdoutFile != null) {
+            File f = resolveFile(stdoutFile);
+            f.getParentFile().mkdirs();
+            pb.redirectOutput(stdoutAppend
+                ? ProcessBuilder.Redirect.appendTo(f)
+                : ProcessBuilder.Redirect.to(f));
+        } else {
+            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        }
+
+        if (stderrFile != null) {
+            File f = resolveFile(stderrFile);
+            f.getParentFile().mkdirs();
+            pb.redirectError(stderrAppend
+                ? ProcessBuilder.Redirect.appendTo(f)
+                : ProcessBuilder.Redirect.to(f));
+        } else {
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        }
+
+        Process process = pb.start();  // don't waitFor() — returns immediately
+        int jobNum = jobCounter.incrementAndGet();
+        long pid = process.pid();
+        System.out.println("[" + jobNum + "] " + pid);
     }
 
     private static File resolveFile(String path) {
