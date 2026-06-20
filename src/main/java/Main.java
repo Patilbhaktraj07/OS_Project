@@ -1,8 +1,8 @@
 import java.util.Scanner;
 import java.util.Set;
+import java.io.File;
 
 public class Main {
-    // Single source of truth for all known builtins
     private static final Set<String> BUILTINS = Set.of("echo", "exit", "type");
 
     public static void main(String[] args) throws Exception {
@@ -37,10 +37,16 @@ public class Main {
                     break;
 
                 case "type":
-                    if (BUILTINS.contains(arguments.trim())) {
-                        System.out.println(arguments.trim() + " is a shell builtin");
+                    String target = arguments.trim();
+                    if (BUILTINS.contains(target)) {
+                        System.out.println(target + " is a shell builtin");
                     } else {
-                        System.out.println(arguments.trim() + ": not found");
+                        String path = findInPath(target);
+                        if (path != null) {
+                            System.out.println(target + " is " + path);
+                        } else {
+                            System.out.println(target + ": not found");
+                        }
                     }
                     break;
 
@@ -50,5 +56,20 @@ public class Main {
         }
 
         scanner.close();
+    }
+
+    // Search PATH for an executable file with the given name.
+    // Returns the full path if found, or null if not found.
+    private static String findInPath(String command) {
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv == null || pathEnv.isEmpty()) return null;
+
+        for (String dir : pathEnv.split(File.pathSeparator)) {
+            File file = new File(dir, command);
+            if (file.isFile() && file.canExecute()) {
+                return file.getAbsolutePath();
+            }
+        }
+        return null;
     }
 }
