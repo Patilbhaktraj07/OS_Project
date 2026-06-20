@@ -88,23 +88,18 @@ public class Main {
 
             if (inSingleQuote) {
                 if (c == '\'') {
-                    inSingleQuote = false;  // only ' is special
+                    inSingleQuote = false;
                 } else {
-                    current.append(c);      // ← backslash appended literally, no special treatment
+                    current.append(c); // everything literal, including backslashes
                 }
-            }
-            
             } else if (inDoubleQuote) {
-                // Inside double quotes: only backslash escaping (for now)
                 if (c == '"') {
                     inDoubleQuote = false;
                 } else {
                     current.append(c);
                 }
             } else {
-                // Unquoted
                 if (c == '\\') {
-                    // Escape: consume next character literally (backslash is dropped)
                     if (i + 1 < input.length()) {
                         current.append(input.charAt(++i));
                     }
