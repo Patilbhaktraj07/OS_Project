@@ -2,7 +2,6 @@ import java.util.Scanner;
 import java.util.Set;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
@@ -10,7 +9,6 @@ import java.io.PrintStream;
 public class Main {
     private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd", "jobs");
     private static String currentDir = System.getProperty("user.dir");
-    private static final AtomicInteger jobCounter = new AtomicInteger(0);
 
     static class Job {
         int number;
@@ -40,7 +38,7 @@ public class Main {
             reapJobs();
 
             System.out.print("$ ");
-            System.out.flush(); // Ensure prompt is flushed immediately
+            System.out.flush();
 
             if (!scanner.hasNextLine()) break;
 
@@ -214,7 +212,7 @@ public class Main {
         }
 
         jobs.removeAll(toRemove);
-        System.out.flush(); // Essential to push the buffered text to stdout immediately
+        System.out.flush();
     }
 
     private static void listJobs() {
@@ -283,11 +281,23 @@ public class Main {
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
         }
 
+        // Calculate recycled job number
+        int jobNum = 1;
+        if (!jobs.isEmpty()) {
+            int maxNum = Integer.MIN_VALUE;
+            for (Job j : jobs) {
+                if (j.number > maxNum) {
+                    maxNum = j.number;
+                }
+            }
+            jobNum = maxNum + 1;
+        }
+
         Process process = pb.start();
-        int jobNum = jobCounter.incrementAndGet();
         long pid = process.pid();
         jobs.add(new Job(jobNum, pid, cmdString, process));
         System.out.println("[" + jobNum + "] " + pid);
+        System.out.flush();
     }
 
     private static File resolveFile(String path) {
