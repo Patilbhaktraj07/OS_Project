@@ -176,18 +176,27 @@ public class Main {
     }
 
     private static void listJobs() {
-        // Determine +/- markers based on the full job table (insertion order = start order)
-        int last = jobs.size() - 1;
+        // Markers are based on job NUMBER (highest = '+', second-highest = '-'),
+        // computed fresh from the jobs currently in the table — not list index.
+        int highestNum = Integer.MIN_VALUE;
+        int secondHighestNum = Integer.MIN_VALUE;
+        for (Job job : jobs) {
+            if (job.number > highestNum) {
+                secondHighestNum = highestNum;
+                highestNum = job.number;
+            } else if (job.number > secondHighestNum) {
+                secondHighestNum = job.number;
+            }
+        }
 
         List<Job> toRemove = new ArrayList<>();
 
-        for (int i = 0; i < jobs.size(); i++) {
-            Job job = jobs.get(i);
+        for (Job job : jobs) {
             String marker;
-            if (i == last) {
-                marker = "+";       // most recently started
-            } else if (i == last - 1) {
-                marker = "-";       // second most recently started
+            if (job.number == highestNum) {
+                marker = "+";       // highest job number among current jobs
+            } else if (job.number == secondHighestNum) {
+                marker = "-";       // second-highest job number among current jobs
             } else {
                 marker = " ";       // all others get a space
             }
