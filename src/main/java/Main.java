@@ -87,20 +87,27 @@ public class Main {
             char c = input.charAt(i);
 
             if (inSingleQuote) {
+                // Inside single quotes: everything is literal, no escaping
                 if (c == '\'') {
                     inSingleQuote = false;
                 } else {
                     current.append(c);
                 }
             } else if (inDoubleQuote) {
+                // Inside double quotes: only backslash escaping (for now)
                 if (c == '"') {
                     inDoubleQuote = false;
                 } else {
-                    current.append(c); // everything literal inside double quotes (for now)
+                    current.append(c);
                 }
             } else {
                 // Unquoted
-                if (c == '\'') {
+                if (c == '\\') {
+                    // Escape: consume next character literally (backslash is dropped)
+                    if (i + 1 < input.length()) {
+                        current.append(input.charAt(++i));
+                    }
+                } else if (c == '\'') {
                     inSingleQuote = true;
                 } else if (c == '"') {
                     inDoubleQuote = true;
