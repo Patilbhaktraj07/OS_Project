@@ -51,15 +51,25 @@ public class Main {
                     break;
 
                 default:
-                    System.out.println(command + ": command not found");
+                    String execPath = findInPath(command);
+                    if (execPath != null) {
+                        runExternal(input.split("\\s+"));
+                    } else {
+                        System.out.println(command + ": command not found");
+                    }
             }
         }
 
         scanner.close();
     }
 
-    // Search PATH for an executable file with the given name.
-    // Returns the full path if found, or null if not found.
+    private static void runExternal(String[] cmdArgs) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(cmdArgs);
+        pb.inheritIO(); // forward stdin/stdout/stderr directly to our shell's streams
+        Process process = pb.start();
+        process.waitFor(); // wait for the program to finish before showing next prompt
+    }
+
     private static String findInPath(String command) {
         String pathEnv = System.getenv("PATH");
         if (pathEnv == null || pathEnv.isEmpty()) return null;
