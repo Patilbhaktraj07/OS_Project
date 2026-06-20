@@ -90,15 +90,24 @@ public class Main {
                 if (c == '\'') {
                     inSingleQuote = false;
                 } else {
-                    current.append(c); // everything literal, including backslashes
+                    current.append(c); // everything literal inside single quotes
                 }
             } else if (inDoubleQuote) {
-                if (c == '"') {
+                if (c == '\\' && i + 1 < input.length()) {
+                    char next = input.charAt(i + 1);
+                    if (next == '"' || next == '\\') {
+                        current.append(next); // \" → "   and   \\ → \
+                        i++;
+                    } else {
+                        current.append(c); // backslash is literal for any other char
+                    }
+                } else if (c == '"') {
                     inDoubleQuote = false;
                 } else {
                     current.append(c);
                 }
             } else {
+                // Unquoted
                 if (c == '\\') {
                     if (i + 1 < input.length()) {
                         current.append(input.charAt(++i));
