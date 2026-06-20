@@ -28,6 +28,7 @@ public class Main {
             String stdoutFile = null;
             String stderrFile = null;
             boolean stdoutAppend = false;
+            boolean stderrAppend = false;
             List<String> cmdTokens = new ArrayList<>();
 
             for (int i = 0; i < tokens.size(); i++) {
@@ -38,8 +39,12 @@ public class Main {
                 } else if ((t.equals(">") || t.equals("1>")) && i + 1 < tokens.size()) {
                     stdoutFile = tokens.get(++i);
                     stdoutAppend = false;
+                } else if (t.equals("2>>") && i + 1 < tokens.size()) {
+                    stderrFile = tokens.get(++i);
+                    stderrAppend = true;
                 } else if (t.equals("2>") && i + 1 < tokens.size()) {
                     stderrFile = tokens.get(++i);
+                    stderrAppend = false;
                 } else {
                     cmdTokens.add(t);
                 }
@@ -63,7 +68,7 @@ public class Main {
             if (stderrFile != null) {
                 File f = resolveFile(stderrFile);
                 f.getParentFile().mkdirs();
-                System.setErr(new PrintStream(new FileOutputStream(f, false)));
+                System.setErr(new PrintStream(new FileOutputStream(f, stderrAppend)));
             }
 
             try {
@@ -108,7 +113,9 @@ public class Main {
                     default:
                         String execPath = findInPath(command);
                         if (execPath != null) {
-                            runExternal(cmdTokens.toArray(new String[0]), stdoutFile, stdoutAppend, stderrFile);
+                            runExternal(cmdTokens.toArray(new String[0]),
+                                stdoutFile, stdoutAppend,
+                                stderrFile, stderrAppend);
                         } else {
                             System.err.println(command + ": command not found");
                         }
@@ -130,7 +137,9 @@ public class Main {
             : new File(currentDir + File.separator + path);
     }
 
-    private static void runExternal(String[] cmdArgs, String stdoutFile, boolean stdoutAppend, String stderrFile) throws Exception {
+    private static void runExternal(String[] cmdArgs,
+                                    String stdoutFile, boolean stdoutAppend,
+                                    String stderrFile, boolean stderrAppend) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmdArgs);
         pb.directory(new File(currentDir));
 
@@ -147,7 +156,9 @@ public class Main {
         if (stderrFile != null) {
             File f = resolveFile(stderrFile);
             f.getParentFile().mkdirs();
-            pb.redirectError(ProcessBuilder.Redirect.to(f));
+            pb.redirectError(stderrAppend
+                ? ProcessBuilder.Redirect.appendTo(f)
+                : ProcessBuilder.Redirect.to(f));
         } else {
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
         }
