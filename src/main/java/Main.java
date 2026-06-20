@@ -11,9 +11,24 @@ public class Main {
 
             String input = scanner.nextLine().trim();
 
-            if (!input.isEmpty()) {
-                System.out.println(input + ": command not found");
+            if (input.isEmpty()) continue;
+
+            if (input.equals("exit") || input.startsWith("exit ")) {
+                // Parse optional exit code: "exit 0", "exit 1", etc.
+                String[] parts = input.split("\\s+", 2);
+                int code = 0;
+                if (parts.length == 2) {
+                    try {
+                        code = Integer.parseInt(parts[1]);
+                    } catch (NumberFormatException e) {
+                        // ignore, default to 0
+                    }
+                }
+                scanner.close();
+                System.exit(code);
             }
+
+            System.out.println(input + ": command not found");
         }
 
         scanner.close();
