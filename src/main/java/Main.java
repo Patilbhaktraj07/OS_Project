@@ -3,7 +3,10 @@ import java.util.Set;
 import java.io.File;
 
 public class Main {
-    private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd");
+    private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd");
+
+    // Track current directory ourselves since Java can't change the OS-level cwd
+    private static String currentDir = System.getProperty("user.dir");
 
     public static void main(String[] args) throws Exception {
         Scanner scanner = new Scanner(System.in);
@@ -19,13 +22,13 @@ public class Main {
 
             String[] parts = input.split("\\s+", 2);
             String command = parts[0];
-            String arguments = parts.length > 1 ? parts[1] : "";
+            String arguments = parts.length > 1 ? parts[1].trim() : "";
 
             switch (command) {
                 case "exit":
                     int code = 0;
                     if (!arguments.isEmpty()) {
-                        try { code = Integer.parseInt(arguments.trim()); }
+                        try { code = Integer.parseInt(arguments); }
                         catch (NumberFormatException e) { /* default 0 */ }
                     }
                     scanner.close();
@@ -37,21 +40,24 @@ public class Main {
                     break;
 
                 case "type":
-                    String target = arguments.trim();
-                    if (BUILTINS.contains(target)) {
-                        System.out.println(target + " is a shell builtin");
+                    if (BUILTINS.contains(arguments)) {
+                        System.out.println(arguments + " is a shell builtin");
                     } else {
-                        String path = findInPath(target);
+                        String path = findInPath(arguments);
                         if (path != null) {
-                            System.out.println(target + " is " + path);
+                            System.out.println(arguments + " is " + path);
                         } else {
-                            System.out.println(target + ": not found");
+                            System.out.println(arguments + ": not found");
                         }
                     }
                     break;
 
                 case "pwd":
-                    System.out.println(System.getProperty("user.dir"));
+                    System.out.println(currentDir);
+                    break;
+
+                case "cd":
+                    changeDirectory(arguments);
                     break;
 
                 default:
@@ -67,8 +73,26 @@ public class Main {
         scanner.close();
     }
 
+    private static void changeDirectory(String path) {
+        // Resolve relative to currentDir if not absolute
+        File target = path.startsWith("/")
+            ? new File(path)
+            : new File(currentDir, path);
+
+        // Normalize: resolves "..", ".", symlinks etc.
+        File resolved = target.getAbsoluteFile().toPath().normalize().toFile();
+
+        if (!resolved.exists() || !resolved.isDirectory()) {
+            System.out.println("cd: " + path + ": No such file or directory");
+        } else {
+            currentDir = resolved.getPath();
+            System.setProperty("user.dir", currentDir); // keep pwd in sync
+        }
+    }
+
     private static void runExternal(String[] cmdArgs) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmdArgs);
+        pb.directory(new File(currentDir)); // run from current shell directory
         pb.inheritIO();
         Process process = pb.start();
         process.waitFor();
