@@ -176,15 +176,13 @@ public class Main {
     }
 
     private static void listJobs() {
-        // Build list of only running jobs for display (don't mutate jobs list)
-        List<Job> running = new ArrayList<>();
-        for (Job j : jobs) {
-            if (j.isRunning()) running.add(j);
-        }
+        // Determine +/- markers based on the full job table (insertion order = start order)
+        int last = jobs.size() - 1;
 
-        int last = running.size() - 1;
-        for (int i = 0; i < running.size(); i++) {
-            Job job = running.get(i);
+        List<Job> toRemove = new ArrayList<>();
+
+        for (int i = 0; i < jobs.size(); i++) {
+            Job job = jobs.get(i);
             String marker;
             if (i == last) {
                 marker = "+";       // most recently started
@@ -193,8 +191,19 @@ public class Main {
             } else {
                 marker = " ";       // all others get a space
             }
-            System.out.printf("[%d]%s  %-24s%s%n", job.number, marker, "Running", job.command);
+
+            if (job.isRunning()) {
+                System.out.printf("[%d]%s  %-24s%s%n", job.number, marker, "Running", job.command);
+            } else {
+                String doneCommand = job.command.endsWith(" &")
+                    ? job.command.substring(0, job.command.length() - 2)
+                    : job.command;
+                System.out.printf("[%d]%s  %-24s%s%n", job.number, marker, "Done", doneCommand);
+                toRemove.add(job);
+            }
         }
+
+        jobs.removeAll(toRemove);
     }
 
     private static void runBackground(String[] cmdArgs,
