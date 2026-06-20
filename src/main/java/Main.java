@@ -14,7 +14,7 @@ public class Main {
         int number;
         long pid;
         String command;
-        Process process;
+        Process process; // For pipelines, this can track the final process in the chain
 
         Job(int number, long pid, String command, Process process) {
             this.number = number;
@@ -34,7 +34,6 @@ public class Main {
         Scanner scanner = new Scanner(System.in);
 
         while (true) {
-            // Check for and report completed background jobs before printing the prompt
             reapJobs();
 
             System.out.print("$ ");
@@ -43,7 +42,6 @@ public class Main {
             if (!scanner.hasNextLine()) break;
 
             String input = scanner.nextLine().trim();
-
             if (input.isEmpty()) continue;
 
             List<String> tokens = parseTokens(input);
@@ -56,6 +54,7 @@ public class Main {
                 if (tokens.isEmpty()) continue;
             }
 
+            // Extract file redirections
             String stdoutFile = null;
             String stderrFile = null;
             boolean stdoutAppend = false;
@@ -82,6 +81,18 @@ public class Main {
             }
 
             if (cmdTokens.isEmpty()) continue;
+
+            // Check if this is a pipeline execution (contains "|")
+            int pipeIndex = cmdTokens.indexOf("|");
+            if (pipeIndex != -1) {
+                List<String> leftCmd = cmdTokens.subList(0, pipeIndex);
+                List<String> rightCmd = cmdTokens.subList(pipeIndex + 1, cmdTokens.size());
+                
+                if (!leftCmd.isEmpty() && !rightCmd.isEmpty()) {
+                    runPipeline(leftCmd, rightCmd, stdoutFile, stdoutAppend, stderrFile, stderrAppend, background, input);
+                    continue;
+                }
+            }
 
             String command = cmdTokens.get(0);
             String arguments = cmdTokens.size() > 1
@@ -122,7 +133,7 @@ public class Main {
                         int code = 0;
                         if (!arguments.isEmpty()) {
                             try { code = Integer.parseInt(arguments); }
-                            catch (NumberFormatException e) { /* default 0 */ }
+                            catch (NumberFormatException e) { }
                         }
                         scanner.close();
                         System.exit(code);
@@ -175,6 +186,61 @@ public class Main {
         }
 
         scanner.close();
+    }
+
+    private static void runPipeline(List<String> leftCmd, List<String> rightCmd,
+                                    String stdoutFile, boolean stdoutAppend,
+                                    String stderrFile, boolean stderrAppend,
+                                    boolean background, String fullInputString) throws Exception {
+        
+        ProcessBuilder pbLeft = new ProcessBuilder(leftCmd);
+        pbLeft.directory(new File(currentDir));
+        
+        ProcessBuilder pbRight = new ProcessBuilder(rightCmd);
+        pbRight.directory(new File(currentDir));
+
+        // Setup standard error output for both pipeline halves
+        if (stderrFile != null) {
+            File f = resolveFile(stderrFile);
+            f.getParentFile().mkdirs();
+            ProcessBuilder.Redirect red = stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f);
+            pbLeft.redirectError(red);
+            pbRight.redirectError(red);
+        } else {
+            pbLeft.redirectError(ProcessBuilder.Redirect.INHERIT);
+            pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+        }
+
+        // Setup the final standard output redirection for the RHS of the pipeline
+        if (stdoutFile != null) {
+            File f = resolveFile(stdoutFile);
+            f.getParentFile().mkdirs();
+            pbRight.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
+        } else {
+            pbRight.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        }
+
+        // Connect the pipeline!
+        List<Process> processes = ProcessBuilder.startPipeline(List.of(pbLeft, pbRight));
+        Process finalProcess = processes.get(processes.size() - 1);
+
+        if (background) {
+            int jobNum = 1;
+            if (!jobs.isEmpty()) {
+                int maxNum = Integer.MIN_VALUE;
+                for (Job j : jobs) {
+                    if (j.number > maxNum) maxNum = j.number;
+                }
+                jobNum = maxNum + 1;
+            }
+            long pid = finalProcess.pid();
+            jobs.add(new Job(jobNum, pid, fullInputString, finalProcess));
+            System.out.println("[" + jobNum + "] " + pid);
+            System.out.flush();
+        } else {
+            // Synchronous execution: Wait for the last command in the pipeline chain to wrap up
+            finalProcess.waitFor();
+        }
     }
 
     private static void reapJobs() {
@@ -264,9 +330,7 @@ public class Main {
         if (stdoutFile != null) {
             File f = resolveFile(stdoutFile);
             f.getParentFile().mkdirs();
-            pb.redirectOutput(stdoutAppend
-                ? ProcessBuilder.Redirect.appendTo(f)
-                : ProcessBuilder.Redirect.to(f));
+            pb.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
         } else {
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         }
@@ -274,21 +338,16 @@ public class Main {
         if (stderrFile != null) {
             File f = resolveFile(stderrFile);
             f.getParentFile().mkdirs();
-            pb.redirectError(stderrAppend
-                ? ProcessBuilder.Redirect.appendTo(f)
-                : ProcessBuilder.Redirect.to(f));
+            pb.redirectError(stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
         } else {
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
         }
 
-        // Calculate recycled job number
         int jobNum = 1;
         if (!jobs.isEmpty()) {
             int maxNum = Integer.MIN_VALUE;
             for (Job j : jobs) {
-                if (j.number > maxNum) {
-                    maxNum = j.number;
-                }
+                if (j.number > maxNum) maxNum = j.number;
             }
             jobNum = maxNum + 1;
         }
@@ -315,9 +374,7 @@ public class Main {
         if (stdoutFile != null) {
             File f = resolveFile(stdoutFile);
             f.getParentFile().mkdirs();
-            pb.redirectOutput(stdoutAppend
-                ? ProcessBuilder.Redirect.appendTo(f)
-                : ProcessBuilder.Redirect.to(f));
+            pb.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
         } else {
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         }
@@ -325,9 +382,7 @@ public class Main {
         if (stderrFile != null) {
             File f = resolveFile(stderrFile);
             f.getParentFile().mkdirs();
-            pb.redirectError(stderrAppend
-                ? ProcessBuilder.Redirect.appendTo(f)
-                : ProcessBuilder.Redirect.to(f));
+            pb.redirectError(stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
         } else {
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
         }
