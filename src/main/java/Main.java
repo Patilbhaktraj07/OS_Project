@@ -36,7 +36,11 @@ public class Main {
         Scanner scanner = new Scanner(System.in);
 
         while (true) {
+            // Check for and report completed background jobs before printing the prompt
+            reapJobs();
+
             System.out.print("$ ");
+            System.out.flush(); // Ensure prompt is flushed immediately
 
             if (!scanner.hasNextLine()) break;
 
@@ -175,9 +179,45 @@ public class Main {
         scanner.close();
     }
 
+    private static void reapJobs() {
+        int highestNum = Integer.MIN_VALUE;
+        int secondHighestNum = Integer.MIN_VALUE;
+        for (Job job : jobs) {
+            if (job.number > highestNum) {
+                secondHighestNum = highestNum;
+                highestNum = job.number;
+            } else if (job.number > secondHighestNum) {
+                secondHighestNum = job.number;
+            }
+        }
+
+        List<Job> toRemove = new ArrayList<>();
+
+        for (Job job : jobs) {
+            if (!job.isRunning()) {
+                String marker;
+                if (job.number == highestNum) {
+                    marker = "+";
+                } else if (job.number == secondHighestNum) {
+                    marker = "-";
+                } else {
+                    marker = " ";
+                }
+
+                String doneCommand = job.command.endsWith(" &")
+                    ? job.command.substring(0, job.command.length() - 2)
+                    : job.command;
+
+                System.out.printf("[%d]%s  %-24s%s%n", job.number, marker, "Done", doneCommand);
+                toRemove.add(job);
+            }
+        }
+
+        jobs.removeAll(toRemove);
+        System.out.flush(); // Essential to push the buffered text to stdout immediately
+    }
+
     private static void listJobs() {
-        // Markers are based on job NUMBER (highest = '+', second-highest = '-'),
-        // computed fresh from the jobs currently in the table — not list index.
         int highestNum = Integer.MIN_VALUE;
         int secondHighestNum = Integer.MIN_VALUE;
         for (Job job : jobs) {
@@ -194,11 +234,11 @@ public class Main {
         for (Job job : jobs) {
             String marker;
             if (job.number == highestNum) {
-                marker = "+";       // highest job number among current jobs
+                marker = "+";
             } else if (job.number == secondHighestNum) {
-                marker = "-";       // second-highest job number among current jobs
+                marker = "-";
             } else {
-                marker = " ";       // all others get a space
+                marker = " ";
             }
 
             if (job.isRunning()) {
@@ -213,6 +253,7 @@ public class Main {
         }
 
         jobs.removeAll(toRemove);
+        System.out.flush();
     }
 
     private static void runBackground(String[] cmdArgs,
