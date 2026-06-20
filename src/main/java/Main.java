@@ -12,7 +12,6 @@ public class Main {
     private static String currentDir = System.getProperty("user.dir");
     private static final AtomicInteger jobCounter = new AtomicInteger(0);
 
-    // Job tracking
     static class Job {
         int number;
         long pid;
@@ -48,7 +47,6 @@ public class Main {
             List<String> tokens = parseTokens(input);
             if (tokens.isEmpty()) continue;
 
-            // Detect background execution
             boolean background = false;
             if (tokens.get(tokens.size() - 1).equals("&")) {
                 background = true;
@@ -178,15 +176,24 @@ public class Main {
     }
 
     private static void listJobs() {
-        // Remove finished jobs first
-        jobs.removeIf(j -> !j.isRunning());
+        // Build list of only running jobs for display (don't mutate jobs list)
+        List<Job> running = new ArrayList<>();
+        for (Job j : jobs) {
+            if (j.isRunning()) running.add(j);
+        }
 
-        for (int i = 0; i < jobs.size(); i++) {
-            Job job = jobs.get(i);
-            String marker = (i == jobs.size() - 1) ? "+" : "-";
-            String status = job.isRunning() ? "Running" : "Done";
-            // Status field is 24 chars total (e.g. "Running" + 17 spaces)
-            System.out.printf("[%d]%s  %-24s%s%n", job.number, marker, status, job.command);
+        int last = running.size() - 1;
+        for (int i = 0; i < running.size(); i++) {
+            Job job = running.get(i);
+            String marker;
+            if (i == last) {
+                marker = "+";       // most recently started
+            } else if (i == last - 1) {
+                marker = "-";       // second most recently started
+            } else {
+                marker = " ";       // all others get a space
+            }
+            System.out.printf("[%d]%s  %-24s%s%n", job.number, marker, "Running", job.command);
         }
     }
 
@@ -220,7 +227,6 @@ public class Main {
         Process process = pb.start();
         int jobNum = jobCounter.incrementAndGet();
         long pid = process.pid();
-
         jobs.add(new Job(jobNum, pid, cmdString, process));
         System.out.println("[" + jobNum + "] " + pid);
     }
