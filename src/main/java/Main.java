@@ -25,13 +25,17 @@ public class Main {
             List<String> tokens = parseTokens(input);
             if (tokens.isEmpty()) continue;
 
-            // Detect stdout redirection: > file  or  1> file
-            String redirectFile = null;
+            // Detect stdout (>/1>) and stderr (2>) redirection
+            String stdoutFile = null;
+            String stderrFile = null;
             List<String> cmdTokens = new ArrayList<>();
+
             for (int i = 0; i < tokens.size(); i++) {
                 String t = tokens.get(i);
                 if ((t.equals(">") || t.equals("1>")) && i + 1 < tokens.size()) {
-                    redirectFile = tokens.get(++i);
+                    stdoutFile = tokens.get(++i);
+                } else if (t.equals("2>") && i + 1 < tokens.size()) {
+                    stderrFile = tokens.get(++i);
                 } else {
                     cmdTokens.add(t);
                 }
@@ -44,19 +48,26 @@ public class Main {
                 ? String.join(" ", cmdTokens.subList(1, cmdTokens.size()))
                 : "";
 
-            // For builtins, swap System.out to the file if redirecting
+            // Redirect System.out / System.err for builtins
             PrintStream originalOut = System.out;
-            if (redirectFile != null) {
-                File f = new File(redirectFile.startsWith("/") ? redirectFile
-                        : currentDir + File.separator + redirectFile);
+            PrintStream originalErr = System.err;
+
+            if (stdoutFile != null) {
+                File f = resolveFile(stdoutFile);
                 f.getParentFile().mkdirs();
                 System.setOut(new PrintStream(new FileOutputStream(f, false)));
+            }
+            if (stderrFile != null) {
+                File f = resolveFile(stderrFile);
+                f.getParentFile().mkdirs();
+                System.setErr(new PrintStream(new FileOutputStream(f, false)));
             }
 
             try {
                 switch (command) {
                     case "exit":
                         System.setOut(originalOut);
+                        System.setErr(originalErr);
                         int code = 0;
                         if (!arguments.isEmpty()) {
                             try { code = Integer.parseInt(arguments); }
@@ -94,35 +105,47 @@ public class Main {
                     default:
                         String execPath = findInPath(command);
                         if (execPath != null) {
-                            runExternal(cmdTokens.toArray(new String[0]), redirectFile);
+                            runExternal(cmdTokens.toArray(new String[0]), stdoutFile, stderrFile);
                         } else {
-                            // Error goes to real stderr, not redirected
                             System.err.println(command + ": command not found");
                         }
                 }
             } finally {
-                // Always restore System.out after builtin runs
                 System.out.flush();
+                System.err.flush();
                 System.setOut(originalOut);
+                System.setErr(originalErr);
             }
         }
 
         scanner.close();
     }
 
-    private static void runExternal(String[] cmdArgs, String redirectFile) throws Exception {
+    private static File resolveFile(String path) {
+        return path.startsWith("/")
+            ? new File(path)
+            : new File(currentDir + File.separator + path);
+    }
+
+    private static void runExternal(String[] cmdArgs, String stdoutFile, String stderrFile) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmdArgs);
         pb.directory(new File(currentDir));
 
-        if (redirectFile != null) {
-            File f = new File(redirectFile.startsWith("/") ? redirectFile
-                    : currentDir + File.separator + redirectFile);
+        if (stdoutFile != null) {
+            File f = resolveFile(stdoutFile);
             f.getParentFile().mkdirs();
-            pb.redirectOutput(f);          // stdout → file
+            pb.redirectOutput(f);
         } else {
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         }
-        pb.redirectError(ProcessBuilder.Redirect.INHERIT); // stderr always to terminal
+
+        if (stderrFile != null) {
+            File f = resolveFile(stderrFile);
+            f.getParentFile().mkdirs();
+            pb.redirectError(f);
+        } else {
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        }
 
         Process process = pb.start();
         process.waitFor();
