@@ -20,7 +20,6 @@ public class Main {
 
             if (input.isEmpty()) continue;
 
-            // Parse input into tokens respecting quotes
             List<String> tokens = parseTokens(input);
             if (tokens.isEmpty()) continue;
 
@@ -41,7 +40,6 @@ public class Main {
                     break;
 
                 case "echo":
-                    // Print each argument separated by a single space
                     System.out.println(String.join(" ", tokens.subList(1, tokens.size())));
                     break;
 
@@ -69,7 +67,6 @@ public class Main {
                 default:
                     String execPath = findInPath(command);
                     if (execPath != null) {
-                        // Pass parsed tokens directly — preserves spaces in args
                         runExternal(tokens.toArray(new String[0]));
                     } else {
                         System.out.println(command + ": command not found");
@@ -80,30 +77,38 @@ public class Main {
         scanner.close();
     }
 
-    // Tokenizer: splits on unquoted whitespace, handles single quotes
     private static List<String> parseTokens(String input) {
         List<String> tokens = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
 
         for (int i = 0; i < input.length(); i++) {
             char c = input.charAt(i);
 
             if (inSingleQuote) {
                 if (c == '\'') {
-                    inSingleQuote = false; // closing quote — stay in same token
+                    inSingleQuote = false;
                 } else {
-                    current.append(c); // everything literal inside single quotes
+                    current.append(c);
+                }
+            } else if (inDoubleQuote) {
+                if (c == '"') {
+                    inDoubleQuote = false;
+                } else {
+                    current.append(c); // everything literal inside double quotes (for now)
                 }
             } else {
+                // Unquoted
                 if (c == '\'') {
-                    inSingleQuote = true; // opening quote — stay in same token
+                    inSingleQuote = true;
+                } else if (c == '"') {
+                    inDoubleQuote = true;
                 } else if (c == ' ' || c == '\t') {
                     if (current.length() > 0) {
                         tokens.add(current.toString());
                         current.setLength(0);
                     }
-                    // skip whitespace between tokens
                 } else {
                     current.append(c);
                 }
