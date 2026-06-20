@@ -3,7 +3,7 @@ import java.util.Set;
 import java.io.File;
 
 public class Main {
-    private static final Set<String> BUILTINS = Set.of("echo", "exit", "type");
+    private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd");
 
     public static void main(String[] args) throws Exception {
         Scanner scanner = new Scanner(System.in);
@@ -50,6 +50,10 @@ public class Main {
                     }
                     break;
 
+                case "pwd":
+                    System.out.println(System.getProperty("user.dir"));
+                    break;
+
                 default:
                     String execPath = findInPath(command);
                     if (execPath != null) {
@@ -65,9 +69,9 @@ public class Main {
 
     private static void runExternal(String[] cmdArgs) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmdArgs);
-        pb.inheritIO(); // forward stdin/stdout/stderr directly to our shell's streams
+        pb.inheritIO();
         Process process = pb.start();
-        process.waitFor(); // wait for the program to finish before showing next prompt
+        process.waitFor();
     }
 
     private static String findInPath(String command) {
