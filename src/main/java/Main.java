@@ -127,7 +127,8 @@ public class Main {
             }
 
             try {
-                executeSingleCommand(command, arguments, cmdTokens, originalOut, originalErr, scanner);
+                executeSingleCommand(command, arguments, cmdTokens, originalOut, originalErr, scanner, 
+                                     stdoutFile, stdoutAppend, stderrFile, stderrAppend);
             } finally {
                 System.out.flush();
                 System.err.flush();
@@ -140,7 +141,9 @@ public class Main {
     }
 
     private static void executeSingleCommand(String command, String arguments, List<String> cmdTokens, 
-                                             PrintStream originalOut, PrintStream originalErr, Scanner scanner) throws Exception {
+                                             PrintStream originalOut, PrintStream originalErr, Scanner scanner,
+                                             String stdoutFile, boolean stdoutAppend,
+                                             String stderrFile, boolean stderrAppend) throws Exception {
         switch (command) {
             case "exit":
                 if (originalOut != null) System.setOut(originalOut);
@@ -186,7 +189,7 @@ public class Main {
             default:
                 String execPath = findInPath(command);
                 if (execPath != null) {
-                    runExternal(cmdTokens.toArray(new String[0]), null, false, null, false);
+                    runExternal(cmdTokens.toArray(new String[0]), stdoutFile, stdoutAppend, stderrFile, stderrAppend);
                 } else {
                     System.err.println(command + ": command not found");
                 }
@@ -212,7 +215,7 @@ public class Main {
 
             System.setOut(lhsPrintStream);
             try {
-                executeSingleCommand(leftCommand, leftArgs, leftCmd, originalOut, originalErr, null);
+                executeSingleCommand(leftCommand, leftArgs, leftCmd, originalOut, originalErr, null, null, false, null, false);
             } finally {
                 System.out.flush();
                 System.setOut(originalOut);
@@ -228,6 +231,13 @@ public class Main {
 
             if (BUILTINS.contains(rightCommand)) {
                 System.setOut(destinationOut);
+                
+                if (stderrFile != null) {
+                    File fErr = resolveFile(stderrFile);
+                    fErr.getParentFile().mkdirs();
+                    System.setErr(new PrintStream(new FileOutputStream(fErr, stderrAppend)));
+                }
+
                 if (rightCommand.equals("type") && rightArgs.isEmpty()) {
                     String inputData = new String(pipeBuffer).trim();
                     if (!inputData.isEmpty()) {
@@ -237,19 +247,29 @@ public class Main {
                     }
                 }
                 try {
-                    executeSingleCommand(rightCommand, rightArgs, rightCmd, originalOut, originalErr, null);
+                    executeSingleCommand(rightCommand, rightArgs, rightCmd, originalOut, originalErr, null, null, false, null, false);
                 } finally {
                     System.out.flush();
+                    System.err.flush();
                     if (stdoutFile != null) destinationOut.close();
                     System.setOut(originalOut);
+                    System.setErr(originalErr);
                 }
             } else {
                 ProcessBuilder pbRight = new ProcessBuilder(rightCmd);
                 pbRight.directory(new File(currentDir));
-                pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+                
+                if (stderrFile != null) {
+                    File f = resolveFile(stderrFile);
+                    f.getParentFile().mkdirs();
+                    pbRight.redirectError(stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
+                } else {
+                    pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+                }
 
                 if (stdoutFile != null) {
                     File f = resolveFile(stdoutFile);
+                    f.getParentFile().mkdirs();
                     pbRight.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
                 } else {
                     pbRight.redirectOutput(ProcessBuilder.Redirect.INHERIT);
@@ -287,6 +307,13 @@ public class Main {
             }
 
             System.setOut(destinationOut);
+            
+            if (stderrFile != null) {
+                File fErr = resolveFile(stderrFile);
+                fErr.getParentFile().mkdirs();
+                System.setErr(new PrintStream(new FileOutputStream(fErr, stderrAppend)));
+            }
+
             if (rightCommand.equals("type") && rightArgs.isEmpty()) {
                 String inputData = new String(pipeBuffer).trim();
                 if (!inputData.isEmpty()) {
@@ -296,20 +323,30 @@ public class Main {
                 }
             }
             try {
-                executeSingleCommand(rightCommand, rightArgs, rightCmd, originalOut, originalErr, null);
+                executeSingleCommand(rightCommand, rightArgs, rightCmd, originalOut, originalErr, null, null, false, null, false);
             } finally {
                 System.out.flush();
+                System.err.flush();
                 if (stdoutFile != null) destinationOut.close();
                 System.setOut(originalOut);
+                System.setErr(originalErr);
             }
         } else {
             // Concurrent streaming pipeline for two external tasks
             ProcessBuilder pbRight = new ProcessBuilder(rightCmd);
             pbRight.directory(new File(currentDir));
-            pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+            
+            if (stderrFile != null) {
+                File f = resolveFile(stderrFile);
+                f.getParentFile().mkdirs();
+                pbRight.redirectError(stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
+            } else {
+                pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+            }
 
             if (stdoutFile != null) {
                 File f = resolveFile(stdoutFile);
+                f.getParentFile().mkdirs();
                 pbRight.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
             } else {
                 pbRight.redirectOutput(ProcessBuilder.Redirect.INHERIT);
