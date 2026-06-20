@@ -8,6 +8,7 @@ import java.io.PrintStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 
 public class Main {
     private static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd", "jobs");
@@ -84,13 +85,27 @@ public class Main {
 
             if (cmdTokens.isEmpty()) continue;
 
+            // Pipeline Detection & Parsing for N-stages
             int pipeIndex = cmdTokens.indexOf("|");
             if (pipeIndex != -1) {
-                List<String> leftCmd = cmdTokens.subList(0, pipeIndex);
-                List<String> rightCmd = cmdTokens.subList(pipeIndex + 1, cmdTokens.size());
-                
-                if (!leftCmd.isEmpty() && !rightCmd.isEmpty()) {
-                    runUniversalPipeline(leftCmd, rightCmd, stdoutFile, stdoutAppend, stderrFile, stderrAppend);
+                List<List<String>> pipelineStages = new ArrayList<>();
+                List<String> currentStage = new ArrayList<>();
+                for (String t : cmdTokens) {
+                    if (t.equals("|")) {
+                        if (!currentStage.isEmpty()) {
+                            pipelineStages.add(currentStage);
+                            currentStage = new ArrayList<>();
+                        }
+                    } else {
+                        currentStage.add(t);
+                    }
+                }
+                if (!currentStage.isEmpty()) {
+                    pipelineStages.add(currentStage);
+                }
+
+                if (pipelineStages.size() > 1) {
+                    runUniversalPipeline(pipelineStages, stdoutFile, stdoutAppend, stderrFile, stderrAppend);
                     continue;
                 }
             }
@@ -196,180 +211,135 @@ public class Main {
         }
     }
 
-    private static void runUniversalPipeline(List<String> leftCmd, List<String> rightCmd,
+    // Handles an N-Stage pipeline natively
+    private static void runUniversalPipeline(List<List<String>> stages,
                                              String stdoutFile, boolean stdoutAppend,
                                              String stderrFile, boolean stderrAppend) throws Exception {
-        String leftCommand = leftCmd.get(0);
-        String leftArgs = leftCmd.size() > 1 ? String.join(" ", leftCmd.subList(1, leftCmd.size())) : "";
+        List<Process> externalProcesses = new ArrayList<>();
+        InputStream prevOut = null;
 
-        String rightCommand = rightCmd.get(0);
-        String rightArgs = rightCmd.size() > 1 ? String.join(" ", rightCmd.subList(1, rightCmd.size())) : "";
+        for (int i = 0; i < stages.size(); i++) {
+            List<String> stageCmd = stages.get(i);
+            boolean isFirst = (i == 0);
+            boolean isLast = (i == stages.size() - 1);
 
-        PrintStream originalOut = System.out;
-        PrintStream originalErr = System.err;
+            String cmdName = stageCmd.get(0);
+            String cmdArgs = stageCmd.size() > 1 ? String.join(" ", stageCmd.subList(1, stageCmd.size())) : "";
 
-        // Built-In LHS processing path
-        if (BUILTINS.contains(leftCommand)) {
-            ByteArrayOutputStream lhsOut = new ByteArrayOutputStream();
-            PrintStream lhsPrintStream = new PrintStream(lhsOut);
+            if (BUILTINS.contains(cmdName)) {
+                PrintStream destinationOut = System.out;
+                if (isLast && stdoutFile != null) {
+                    File f = resolveFile(stdoutFile);
+                    f.getParentFile().mkdirs();
+                    destinationOut = new PrintStream(new FileOutputStream(f, stdoutAppend));
+                }
 
-            System.setOut(lhsPrintStream);
-            try {
-                executeSingleCommand(leftCommand, leftArgs, leftCmd, originalOut, originalErr, null, null, false, null, false);
-            } finally {
-                System.out.flush();
-                System.setOut(originalOut);
-            }
-            byte[] pipeBuffer = lhsOut.toByteArray();
+                ByteArrayOutputStream bufferOut = new ByteArrayOutputStream();
+                PrintStream executionOut = isLast ? destinationOut : new PrintStream(bufferOut);
 
-            PrintStream destinationOut = originalOut;
-            if (stdoutFile != null) {
-                File f = resolveFile(stdoutFile);
-                f.getParentFile().mkdirs();
-                destinationOut = new PrintStream(new FileOutputStream(f, stdoutAppend));
-            }
+                // Handle pipe input passing (for built-ins like `type`)
+                if (!isFirst && prevOut != null && cmdName.equals("type") && cmdArgs.isEmpty()) {
+                    byte[] prevData = prevOut.readAllBytes();
+                    String inputData = new String(prevData).trim();
+                    if (!inputData.isEmpty()) {
+                        cmdArgs = inputData.split("\\s+")[0];
+                        stageCmd = new ArrayList<>(stageCmd);
+                        stageCmd.add(cmdArgs);
+                    }
+                }
 
-            if (BUILTINS.contains(rightCommand)) {
-                System.setOut(destinationOut);
-                
-                if (stderrFile != null) {
+                PrintStream oldOut = System.out;
+                PrintStream oldErr = System.err;
+                System.setOut(executionOut);
+
+                if (isLast && stderrFile != null) {
                     File fErr = resolveFile(stderrFile);
                     fErr.getParentFile().mkdirs();
                     System.setErr(new PrintStream(new FileOutputStream(fErr, stderrAppend)));
                 }
 
-                if (rightCommand.equals("type") && rightArgs.isEmpty()) {
-                    String inputData = new String(pipeBuffer).trim();
-                    if (!inputData.isEmpty()) {
-                        rightArgs = inputData.split("\\s+")[0];
-                        rightCmd = new ArrayList<>(rightCmd);
-                        rightCmd.add(rightArgs);
-                    }
-                }
                 try {
-                    executeSingleCommand(rightCommand, rightArgs, rightCmd, originalOut, originalErr, null, null, false, null, false);
+                    executeSingleCommand(cmdName, cmdArgs, stageCmd, oldOut, oldErr, null, null, false, null, false);
                 } finally {
                     System.out.flush();
                     System.err.flush();
-                    if (stdoutFile != null) destinationOut.close();
-                    System.setOut(originalOut);
-                    System.setErr(originalErr);
+                    System.setOut(oldOut);
+                    System.setErr(oldErr);
+                    if (isLast && stdoutFile != null) destinationOut.close();
+                }
+
+                if (!isLast) {
+                    prevOut = new ByteArrayInputStream(bufferOut.toByteArray());
+                } else {
+                    prevOut = null;
                 }
             } else {
-                ProcessBuilder pbRight = new ProcessBuilder(rightCmd);
-                pbRight.directory(new File(currentDir));
-                
-                if (stderrFile != null) {
+                // External Command handling
+                ProcessBuilder pb = new ProcessBuilder(stageCmd);
+                pb.directory(new File(currentDir));
+
+                if (isLast && stderrFile != null) {
                     File f = resolveFile(stderrFile);
                     f.getParentFile().mkdirs();
-                    pbRight.redirectError(stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
+                    pb.redirectError(stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
                 } else {
-                    pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
+                    pb.redirectError(ProcessBuilder.Redirect.INHERIT);
                 }
 
-                if (stdoutFile != null) {
-                    File f = resolveFile(stdoutFile);
-                    f.getParentFile().mkdirs();
-                    pbRight.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
+                if (isLast) {
+                    if (stdoutFile != null) {
+                        File f = resolveFile(stdoutFile);
+                        f.getParentFile().mkdirs();
+                        pb.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
+                    } else {
+                        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+                    }
                 } else {
-                    pbRight.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+                    pb.redirectOutput(ProcessBuilder.Redirect.PIPE);
                 }
 
-                Process procRight = pbRight.start();
-                try (OutputStream os = procRight.getOutputStream()) {
-                    os.write(pipeBuffer);
-                    os.flush();
+                if (isFirst) {
+                    pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+                } else {
+                    pb.redirectInput(ProcessBuilder.Redirect.PIPE);
                 }
-                procRight.waitFor();
+
+                Process p = pb.start();
+                externalProcesses.add(p);
+
+                // Start an async background copy thread to stream previous output buffer into current input channel
+                if (!isFirst) {
+                    OutputStream pIn = p.getOutputStream();
+                    InputStream finalPrevOut = prevOut;
+                    if (finalPrevOut != null) {
+                        new Thread(() -> {
+                            try {
+                                byte[] buf = new byte[8192];
+                                int read;
+                                while ((read = finalPrevOut.read(buf)) != -1) {
+                                    pIn.write(buf, 0, read);
+                                    pIn.flush();
+                                }
+                            } catch (Exception e) {}
+                            finally {
+                                try { pIn.close(); } catch (Exception e) {}
+                                try { finalPrevOut.close(); } catch (Exception e) {}
+                            }
+                        }).start();
+                    } else {
+                        try { pIn.close(); } catch (Exception e) {}
+                    }
+                }
+
+                if (!isLast) {
+                    prevOut = p.getInputStream();
+                }
             }
-            return;
         }
 
-        // External LHS processing path
-        ProcessBuilder pbLeft = new ProcessBuilder(leftCmd);
-        pbLeft.directory(new File(currentDir));
-        pbLeft.redirectError(ProcessBuilder.Redirect.INHERIT);
-        Process procLeft = pbLeft.start();
-
-        if (BUILTINS.contains(rightCommand)) {
-            ByteArrayOutputStream lhsOut = new ByteArrayOutputStream();
-            try (InputStream is = procLeft.getInputStream()) {
-                is.transferTo(lhsOut);
-            }
-            procLeft.waitFor();
-            byte[] pipeBuffer = lhsOut.toByteArray();
-
-            PrintStream destinationOut = originalOut;
-            if (stdoutFile != null) {
-                File f = resolveFile(stdoutFile);
-                f.getParentFile().mkdirs();
-                destinationOut = new PrintStream(new FileOutputStream(f, stdoutAppend));
-            }
-
-            System.setOut(destinationOut);
-            
-            if (stderrFile != null) {
-                File fErr = resolveFile(stderrFile);
-                fErr.getParentFile().mkdirs();
-                System.setErr(new PrintStream(new FileOutputStream(fErr, stderrAppend)));
-            }
-
-            if (rightCommand.equals("type") && rightArgs.isEmpty()) {
-                String inputData = new String(pipeBuffer).trim();
-                if (!inputData.isEmpty()) {
-                    rightArgs = inputData.split("\\s+")[0];
-                    rightCmd = new ArrayList<>(rightCmd);
-                    rightCmd.add(rightArgs);
-                }
-            }
-            try {
-                executeSingleCommand(rightCommand, rightArgs, rightCmd, originalOut, originalErr, null, null, false, null, false);
-            } finally {
-                System.out.flush();
-                System.err.flush();
-                if (stdoutFile != null) destinationOut.close();
-                System.setOut(originalOut);
-                System.setErr(originalErr);
-            }
-        } else {
-            // Concurrent streaming pipeline for two external tasks
-            ProcessBuilder pbRight = new ProcessBuilder(rightCmd);
-            pbRight.directory(new File(currentDir));
-            
-            if (stderrFile != null) {
-                File f = resolveFile(stderrFile);
-                f.getParentFile().mkdirs();
-                pbRight.redirectError(stderrAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
-            } else {
-                pbRight.redirectError(ProcessBuilder.Redirect.INHERIT);
-            }
-
-            if (stdoutFile != null) {
-                File f = resolveFile(stdoutFile);
-                f.getParentFile().mkdirs();
-                pbRight.redirectOutput(stdoutAppend ? ProcessBuilder.Redirect.appendTo(f) : ProcessBuilder.Redirect.to(f));
-            } else {
-                pbRight.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-            }
-
-            Process procRight = pbRight.start();
-
-            Thread transferThread = new Thread(() -> {
-                try (InputStream is = procLeft.getInputStream();
-                     OutputStream os = procRight.getOutputStream()) {
-                    byte[] buffer = new byte[4096];
-                    int bytesRead;
-                    while ((bytesRead = is.read(buffer)) != -1) {
-                        os.write(buffer, 0, bytesRead);
-                        os.flush();
-                    }
-                } catch (Exception e) {
-                }
-            });
-            transferThread.start();
-
-            procRight.waitFor();
-            procLeft.destroy();
+        // Suspend and wait for the entire multi-stage chain to complete
+        for (Process p : externalProcesses) {
+            p.waitFor();
         }
     }
 
