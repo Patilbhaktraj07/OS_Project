@@ -87,12 +87,13 @@ public class Main {
             char c = input.charAt(i);
 
             if (inSingleQuote) {
-                // Inside single quotes: everything is literal, no escaping
                 if (c == '\'') {
-                    inSingleQuote = false;
+                    inSingleQuote = false;  // only ' is special
                 } else {
-                    current.append(c);
+                    current.append(c);      // ← backslash appended literally, no special treatment
                 }
+            }
+            
             } else if (inDoubleQuote) {
                 // Inside double quotes: only backslash escaping (for now)
                 if (c == '"') {
