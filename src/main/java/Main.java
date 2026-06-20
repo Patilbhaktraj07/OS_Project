@@ -12,6 +12,27 @@ public class Main {
     private static String currentDir = System.getProperty("user.dir");
     private static final AtomicInteger jobCounter = new AtomicInteger(0);
 
+    // Job tracking
+    static class Job {
+        int number;
+        long pid;
+        String command;
+        Process process;
+
+        Job(int number, long pid, String command, Process process) {
+            this.number = number;
+            this.pid = pid;
+            this.command = command;
+            this.process = process;
+        }
+
+        boolean isRunning() {
+            return process.isAlive();
+        }
+    }
+
+    private static final List<Job> jobs = new ArrayList<>();
+
     public static void main(String[] args) throws Exception {
         Scanner scanner = new Scanner(System.in);
 
@@ -67,12 +88,12 @@ public class Main {
                 ? String.join(" ", cmdTokens.subList(1, cmdTokens.size()))
                 : "";
 
-            // Background builtins are unusual; run them normally for now
             if (background && !BUILTINS.contains(command)) {
                 String execPath = findInPath(command);
                 if (execPath != null) {
                     runBackground(cmdTokens.toArray(new String[0]),
-                        stdoutFile, stdoutAppend, stderrFile, stderrAppend);
+                        stdoutFile, stdoutAppend, stderrFile, stderrAppend,
+                        String.join(" ", cmdTokens) + " &");
                 } else {
                     System.err.println(command + ": command not found");
                 }
@@ -133,6 +154,7 @@ public class Main {
                         break;
 
                     case "jobs":
+                        listJobs();
                         break;
 
                     default:
@@ -155,9 +177,23 @@ public class Main {
         scanner.close();
     }
 
+    private static void listJobs() {
+        // Remove finished jobs first
+        jobs.removeIf(j -> !j.isRunning());
+
+        for (int i = 0; i < jobs.size(); i++) {
+            Job job = jobs.get(i);
+            String marker = (i == jobs.size() - 1) ? "+" : "-";
+            String status = job.isRunning() ? "Running" : "Done";
+            // Status field is 24 chars total (e.g. "Running" + 17 spaces)
+            System.out.printf("[%d]%s  %-24s%s%n", job.number, marker, status, job.command);
+        }
+    }
+
     private static void runBackground(String[] cmdArgs,
                                       String stdoutFile, boolean stdoutAppend,
-                                      String stderrFile, boolean stderrAppend) throws Exception {
+                                      String stderrFile, boolean stderrAppend,
+                                      String cmdString) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmdArgs);
         pb.directory(new File(currentDir));
 
@@ -181,9 +217,11 @@ public class Main {
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
         }
 
-        Process process = pb.start();  // don't waitFor() — returns immediately
+        Process process = pb.start();
         int jobNum = jobCounter.incrementAndGet();
         long pid = process.pid();
+
+        jobs.add(new Job(jobNum, pid, cmdString, process));
         System.out.println("[" + jobNum + "] " + pid);
     }
 
