@@ -7,28 +7,35 @@ public class Main {
         while (true) {
             System.out.print("$ ");
 
-            if (!scanner.hasNextLine()) break; // EOF (Ctrl+D)
+            if (!scanner.hasNextLine()) break;
 
             String input = scanner.nextLine().trim();
 
             if (input.isEmpty()) continue;
 
-            if (input.equals("exit") || input.startsWith("exit ")) {
-                // Parse optional exit code: "exit 0", "exit 1", etc.
-                String[] parts = input.split("\\s+", 2);
-                int code = 0;
-                if (parts.length == 2) {
-                    try {
-                        code = Integer.parseInt(parts[1]);
-                    } catch (NumberFormatException e) {
-                        // ignore, default to 0
-                    }
-                }
-                scanner.close();
-                System.exit(code);
-            }
+            // Parse command and arguments
+            String[] parts = input.split("\\s+", 2);
+            String command = parts[0];
+            String arguments = parts.length > 1 ? parts[1] : "";
 
-            System.out.println(input + ": command not found");
+            switch (command) {
+                case "exit":
+                    int code = 0;
+                    if (!arguments.isEmpty()) {
+                        try { code = Integer.parseInt(arguments.trim()); }
+                        catch (NumberFormatException e) { /* default 0 */ }
+                    }
+                    scanner.close();
+                    System.exit(code);
+                    break;
+
+                case "echo":
+                    System.out.println(arguments);
+                    break;
+
+                default:
+                    System.out.println(command + ": command not found");
+            }
         }
 
         scanner.close();
